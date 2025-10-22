@@ -1,0 +1,8 @@
+numpy == 2.3.3
+pandas == 2.3.3
+seaborn == 0.13.2
+matplotlib == 3.10.7
+pydicom == 3.0.1
+pymongo == 4.15.3
+scikit-image == 0.25.2
+Pillow == 11.3.0
