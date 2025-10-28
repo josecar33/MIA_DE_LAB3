@@ -21,7 +21,7 @@ class ETLProcessor:
         """
         self.jpeg_output_dir = jpeg_output_dir
         os.makedirs(self.jpeg_output_dir, exist_ok=True)
-        print(f"ETLProcessor initialized. JPEG output directory: {self.jpeg_output_dir}")
+        #print(f"ETLProcessor initialized. JPEG output directory: {self.jpeg_output_dir}")
 
     # --- 1. EXTRACT ---
 
@@ -35,7 +35,7 @@ class ETLProcessor:
         Returns:
             dict: A dictionary containing the raw extracted metadata, or None if extraction fails.
         """
-        print(f"\n[E] Extracting from: {dicom_file_path}")
+        #print(f"\n[E] Extracting from: {dicom_file_path}")
         try:
             # Read DICOM file, stop_before_pixels=True makes it faster as we don't need the image yet
             ds = pydicom.dcmread(dicom_file_path, stop_before_pixels=True)
@@ -80,7 +80,7 @@ class ETLProcessor:
                 'ExposureTime': get_val((0x0018, 0x1150)),
                 'XRayTubeCurrent': get_val((0x0018, 0x1151)),
             }
-            print(f"[E] Raw data extracted for Study UID {raw_data.get('StudyInstanceUID')}")
+            #print(f"[E] Raw data extracted for Study UID {raw_data.get('StudyInstanceUID')}")
             # print(f"[E] Raw data: {raw_data}") # Uncomment for full data dump
             return raw_data
         
@@ -103,10 +103,10 @@ class ETLProcessor:
             dict: A dictionary containing all dimension and fact table data, ready for loading.
         """
         if not raw_data:
-            print("[T] Skipping transform, no raw data provided.")
+            #print("[T] Skipping transform, no raw data provided.")
             return None
 
-        print(f"\n[T] Transforming data for Study UID: {raw_data.get('StudyInstanceUID')}")
+        #print(f"\n[T] Transforming data for Study UID: {raw_data.get('StudyInstanceUID')}")
         
         # --- 1. Transform Dimensions ---
 
@@ -118,7 +118,7 @@ class ETLProcessor:
             'age': patient_age_int
         }
         patient_key = self.surrogate_key(patient_dim_vals)
-        print(f"[T] Patient Dim transformed: Key={patient_key}, Data={patient_dim_vals}")
+        #print(f"[T] Patient Dim transformed: Key={patient_key}, Data={patient_dim_vals}")
 
         # Station Dimension
         station_dim_vals = {
@@ -126,7 +126,7 @@ class ETLProcessor:
             'model': raw_data.get('ManufacturerModelName')
         }
         station_key = self.surrogate_key(station_dim_vals)
-        print(f"[T] Station Dim transformed: Key={station_key}, Data={station_dim_vals}")
+        #print(f"[T] Station Dim transformed: Key={station_key}, Data={station_dim_vals}")
 
         # Protocol Dimension
         contrast_agent = self.normalize_contrast_agent(raw_data.get('ContrastBolusAgent'))
@@ -136,7 +136,7 @@ class ETLProcessor:
             'position': raw_data.get('PatientPosition')
         }
         protocol_key = self.surrogate_key(protocol_dim_vals)
-        print(f"[T] Protocol Dim transformed: Key={protocol_key}, Data={protocol_dim_vals}")
+        #print(f"[T] Protocol Dim transformed: Key={protocol_key}, Data={protocol_dim_vals}")
 
         # Date Dimension
         study_date = raw_data.get('StudyDate')
@@ -150,7 +150,7 @@ class ETLProcessor:
         
         date_dim_vals = {'year': year, 'month': month}
         date_key = self.surrogate_key(date_dim_vals)
-        print(f"[T] Date Dim transformed: Key={date_key}, Data={date_dim_vals}")
+        #print(f"[T] Date Dim transformed: Key={date_key}, Data={date_dim_vals}")
 
         # Image Dimension
         raw_pixel_spacing = raw_data.get('PixelSpacing')
@@ -174,11 +174,11 @@ class ETLProcessor:
             'kvp': float(raw_data.get('KVP')) if raw_data.get('KVP') else None
         }
         image_key = self.surrogate_key(image_dim_vals)
-        print(f"[T] Image Dim transformed: Key={image_key}, Data={image_dim_vals}")
+        #print(f"[T] Image Dim transformed: Key={image_key}, Data={image_dim_vals}")
 
         # --- 2. Transform Image File (DICOM -> JPEG) ---
         jpeg_path = self.dicom_to_jpeg(dicom_file_path, self.jpeg_output_dir)
-        print(f"[T] Image file transformed and saved to: {jpeg_path}")
+        #print(f"[T] Image file transformed and saved to: {jpeg_path}")
 
         # --- 3. Assemble Fact Table Data ---
         study_fact = {
@@ -195,7 +195,7 @@ class ETLProcessor:
             'file_path': jpeg_path
          
         }
-        print(f"[T] Study Fact assembled: {study_fact}")
+        #print(f"[T] Study Fact assembled: {study_fact}")
 
         # Return all transformed data, structured for loading
         return {

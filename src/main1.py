@@ -13,8 +13,8 @@ DATA_DIR = os.path.join(BASE_DIR, 'data', 'dicom_dir')
 JPEG_OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'jpeg_output')
 CSV_OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'processed_csv') 
 
-MONGO_CONNECTION_STRING = "mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority"
-DB_NAME = "dicom_db"
+MONGO_CONNECTION_STRING = "mongodb://localhost:27017/"
+DB_NAME = "images"
 
 
 def main():
@@ -29,6 +29,14 @@ def main():
     os.makedirs(CSV_OUTPUT_DIR, exist_ok=True)
     
     processor = ETLProcessor(jpeg_output_dir=JPEG_OUTPUT_DIR)
+
+    try:
+        print(f"Connecting to LOCAL MongoDB at {MONGO_CONNECTION_STRING}...")
+        loader = MongoLoader(connection_string=MONGO_CONNECTION_STRING, db_name=DB_NAME)
+    except Exception as e:
+        print(f"Failed to initialize MongoDB loader. Halting process. Error: {e}")
+        print("HINT: Is your local MongoDB service running?")
+        return
     
     all_facts = []
     all_dim_patients = []
@@ -66,7 +74,7 @@ def main():
                 print(f"\nReached max file limit ({max_files_to_process}) for this demo.")
                 break
             
-            print(f"\n--- Processing file {files_processed + 1}/{total_files}: {filename} ---")
+            #print(f"\n--- Processing file {files_processed + 1}/{total_files}: {filename} ---")
             file_path = os.path.join(DATA_DIR, filename)
             
             try:
@@ -84,8 +92,8 @@ def main():
                         all_dim_images.append(transformed_data['dim_image'])
                         all_dim_dates.append(transformed_data['dim_date'])
 
-                        print(f"--- Successfully Transformed {filename} ---")
-                        print(json.dumps(transformed_data, indent=2)) # Uncomment to see full JSON
+                        #print(f"--- Successfully Transformed {filename} ---")
+                        #print(json.dumps(transformed_data, indent=2)) # Uncomment to see full JSON
                 
                 files_processed += 1
                     
@@ -135,6 +143,35 @@ def main():
     for name, df in dataframes_to_save.items():
           print(f"\n** {name} **")
           print(df.head())
+
+    print("\n--- Loading Data to MongoDB (Bulk Operation) ---")
+    try:
+        # Convert DataFrames to lists of dictionaries
+        dim_patients_data = dataframes_to_save['dim_patient'].to_dict('records')
+        dim_stations_data = dataframes_to_save['dim_station'].to_dict('records')
+        dim_protocols_data = dataframes_to_save['dim_protocol'].to_dict('records')
+        dim_images_data = dataframes_to_save['dim_image'].to_dict('records')
+        dim_dates_data = dataframes_to_save['dim_date'].to_dict('records')
+        facts_data = dataframes_to_save['fact_study'].to_dict('records')
+        
+        # Load Dimensions (Bulk Upsert)
+        loader.bulk_upsert_dimension('dim_patient', dim_patients_data, 'patient_id')
+        loader.bulk_upsert_dimension('dim_station', dim_stations_data, 'station_id')
+        loader.bulk_upsert_dimension('dim_protocol', dim_protocols_data, 'protocol_id')
+        loader.bulk_upsert_dimension('dim_image', dim_images_data, 'image_id')
+        loader.bulk_upsert_dimension('dim_date', dim_dates_data, 'date_id')
+        
+        # Load Facts (Bulk Insert)
+        loader.bulk_insert_facts('fact_study', facts_data)
+        
+        # 7. Create Indexes
+        loader.create_indexes()
+
+    except Exception as e:
+        print(f"!!! ERROR during MongoDB load: {e}")
+
+    print("\n--- Full ETL Process Finished ---")
+    print("Check MongoDB Compass (connect to localhost) to see your 'dicom_db' database.")
 
 if __name__ == "__main__":
     main()
