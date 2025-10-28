@@ -1,4 +1,4 @@
-_id,patient_id_dicom,sex,age
+patient_id,patient_id_dicom,sex,age
 9e04a9518d9b3bc77ba4c0a01b7574aa,TCGA-17-Z034,M,60
 c47b6c09340e93ceb4aca637ec6b852a,TCGA-17-Z011,M,69
 0b5ff3a5889923a5c8160b161f8ba2b9,TCGA-60-2695,F,74

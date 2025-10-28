@@ -1,4 +1,4 @@
-_id,rows,cols,pixel_spacing_norm,slice_thickness,kvp
+image_id,rows,cols,pixel_spacing_norm,slice_thickness,kvp
 244a5225a00016a17e07a994deccf56a,512,512,0.8,8.0,140.0
 2e27405c65bc7da4049776146c471669,512,512,0.6,2.0,120.0
 921ce5952b3bd3a3124a563e8b985252,512,512,0.65,5.0,130.0

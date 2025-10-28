@@ -182,28 +182,29 @@ class ETLProcessor:
 
         # --- 3. Assemble Fact Table Data ---
         study_fact = {
-            'study_uid': raw_data.get('StudyInstanceUID'),
+   
+            # Foreign Keys
+            'patient_id': patient_key,
+            'station_id': station_key,
+            'protocol_id': protocol_key,
+            'image_id': image_key,
+            'date_id': date_key,
+
             'exposure_time': float(raw_data.get('ExposureTime')) if raw_data.get('ExposureTime') else None,
             'tube_current': float(raw_data.get('XRayTubeCurrent')) if raw_data.get('XRayTubeCurrent') else None,
-            'jpeg_path': jpeg_path,
-            
-            # Foreign Keys
-            'patient_fk': patient_key,
-            'station_fk': station_key,
-            'protocol_fk': protocol_key,
-            'image_fk': image_key,
-            'date_fk': date_key
+            'file_path': jpeg_path
+         
         }
         print(f"[T] Study Fact assembled: {study_fact}")
 
         # Return all transformed data, structured for loading
         return {
             'fact_study': study_fact,
-            'dim_patient': {'_id': patient_key, **patient_dim_vals},
-            'dim_station': {'_id': station_key, **station_dim_vals},
-            'dim_protocol': {'_id': protocol_key, **protocol_dim_vals},
-            'dim_image': {'_id': image_key, **image_dim_vals},
-            'dim_date': {'_id': date_key, **date_dim_vals}
+            'dim_patient': {'patient_id': patient_key, **patient_dim_vals},
+            'dim_station': {'station_id': station_key, **station_dim_vals},
+            'dim_protocol': {'protocol_id': protocol_key, **protocol_dim_vals},
+            'dim_image': {'image_id': image_key, **image_dim_vals},
+            'dim_date': {'date_id': date_key, **date_dim_vals}
         }
 
     # --- 3. HELPER FUNCTIONS (as requested by PDF) ---

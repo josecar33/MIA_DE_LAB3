@@ -1,4 +1,4 @@
-_id,body_part,contrast_agent,position
+protocol_id,body_part,contrast_agent,position
 6abfc9271a50fc0bef6476c320336afd,CHEST,None,HFS
 8f402fa789800f41110253f2a6a4110c,LUNG,APPLIED,FFS
 2fb3086e481aac85375c733dd660887b,LUNG,None,HFS

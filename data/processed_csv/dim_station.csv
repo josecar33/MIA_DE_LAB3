@@ -1,4 +1,4 @@
-_id,manufacturer,model
+station_id,manufacturer,model
 eaa20b664ab7cf3a1fbde9a945a25b93,SIEMENS,SOMATOM PLUS 4
 9241fe0c593613393348187d160495f4,SIEMENS,Definition AS+
 9eb311ea2cbc1021bcbb8bcb59d3c2d7,SIEMENS,Emotion

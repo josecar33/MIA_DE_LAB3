@@ -1,18 +1,21 @@
 import os
 import json
 import pandas as pd
-from et1 import ETLProcessor # Using the 'et1.py' filename you provided
+from et1 import ETLProcessor 
+from loader import MongoLoader 
 
-# --- Configuration ---
-# Get the directory where this script is located (e.g., .../Lab3/src)
+
 CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# Get the parent directory (the project root, e.g., .../Lab3)
 BASE_DIR = os.path.dirname(CURRENT_SCRIPT_DIR) 
 
 # Build paths from the project root
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'dicom_dir')
 JPEG_OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'jpeg_output')
-CSV_OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'processed_csv') # New folder for CSVs
+CSV_OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'processed_csv') 
+
+MONGO_CONNECTION_STRING = "mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority"
+DB_NAME = "dicom_db"
+
 
 def main():
     """
@@ -27,19 +30,31 @@ def main():
     
     processor = ETLProcessor(jpeg_output_dir=JPEG_OUTPUT_DIR)
     
-    # Lists to hold all our transformed data, separated by table
     all_facts = []
     all_dim_patients = []
     all_dim_stations = []
     all_dim_protocols = []
     all_dim_images = []
     all_dim_dates = []
+
+    #try:
+        # Check if the user has updated the connection string
+        #if "<username>" in MONGO_CONNECTION_STRING:
+        #    print("="*50)
+        #    print("!!! ERROR: Please update MONGO_CONNECTION_STRING in main.py !!!")
+        #    print("Get your connection string from MongoDB Atlas (see Step 1 in guide).")
+        #    print("="*50)
+        #    return
+            
+        #loader = MongoLoader(connection_string=MONGO_CONNECTION_STRING, db_name=DB_NAME)
+    #except Exception as e:
+        #print(f"Failed to initialize MongoDB loader. Halting process. Error: {e}")
+        #return
     
-    # --- Configuration for Demo ---
-    max_files_to_process = 100  # Set to a high number to process all, or 3 for a quick test
+    max_files_to_process = 110  # Set to a high number to process all, or 3 for a quick test
     files_processed = 0
     
-    # 2. Iterate over DICOM files in the input directory
+    
     print(f"Scanning for DICOM files in: {DATA_DIR}")
     try:
         dicom_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.dcm')]
@@ -55,11 +70,9 @@ def main():
             file_path = os.path.join(DATA_DIR, filename)
             
             try:
-                # 3. Step E: Extract
                 raw_data = processor.extract_metadata(file_path)
                 
                 if raw_data:
-                    # 4. Step T: Transform
                     transformed_data = processor.transform_data(raw_data, file_path)
                     
                     if transformed_data:
@@ -72,7 +85,7 @@ def main():
                         all_dim_dates.append(transformed_data['dim_date'])
 
                         print(f"--- Successfully Transformed {filename} ---")
-                        # print(json.dumps(transformed_data, indent=2)) # Uncomment to see full JSON
+                        print(json.dumps(transformed_data, indent=2)) # Uncomment to see full JSON
                 
                 files_processed += 1
                     
@@ -101,11 +114,11 @@ def main():
     # We drop duplicates from DIMENSION tables to keep them clean
     dataframes_to_save = {
         "fact_study": pd.DataFrame(all_facts),
-        "dim_patient": pd.DataFrame(all_dim_patients).drop_duplicates(subset=['_id']),
-        "dim_station": pd.DataFrame(all_dim_stations).drop_duplicates(subset=['_id']),
-        "dim_protocol": pd.DataFrame(all_dim_protocols).drop_duplicates(subset=['_id']),
-        "dim_image": pd.DataFrame(all_dim_images).drop_duplicates(subset=['_id']),
-        "dim_date": pd.DataFrame(all_dim_dates).drop_duplicates(subset=['_id'])
+        "dim_patient": pd.DataFrame(all_dim_patients).drop_duplicates(subset=['patient_id']),
+        "dim_station": pd.DataFrame(all_dim_stations).drop_duplicates(subset=['station_id']),
+        "dim_protocol": pd.DataFrame(all_dim_protocols).drop_duplicates(subset=['protocol_id']),
+        "dim_image": pd.DataFrame(all_dim_images).drop_duplicates(subset=['image_id']),
+        "dim_date": pd.DataFrame(all_dim_dates).drop_duplicates(subset=['date_id'])
     }
     
     # Save each DataFrame to CSV
