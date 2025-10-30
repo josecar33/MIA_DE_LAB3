@@ -19,7 +19,6 @@ class MongoLoader:
             print(f"ERROR: Could not connect to MongoDB. Check connection string/network access. Error: {e}")
             raise
             
-    # --- MODIFIED FUNCTION FOR BATCH LOADING DIMENSIONS ---
     def bulk_upsert_dimension(self, collection_name, data_list, pk_name):
         """
         Performs a bulk "upsert" (update or insert) for dimension data.
@@ -34,18 +33,11 @@ class MongoLoader:
         operations = []
 
         for doc in data_list:
-            # Get the surrogate key value (e.g., the hash)
             pk_value = doc[pk_name] 
             
-            # --- CAMBIO CLAVE AQUÍ ---
-            # Ya no renombramos el campo a '_id'.
-            # Le decimos a ReplaceOne que busque un documento donde 'patient_id' == pk_value
-            # Si lo encuentra, lo reemplaza.
-            # Si no (upsert=True), inserta este nuevo documento.
-            # MongoDB creará su propio campo '_id' automáticamente.
             op = ReplaceOne(
-                { pk_name: pk_value }, # El FILTRO para encontrar el documento
-                doc,                   # El documento de REEMPLAZO (con 'patient_id' intacto)
+                { pk_name: pk_value },
+                doc,                   
                 upsert=True
             )
             operations.append(op)
@@ -57,7 +49,6 @@ class MongoLoader:
         except Exception as e:
             print(f"ERROR: Bulk upsert failed for {collection_name}. Error: {e}")
             
-    # --- NO CHANGES TO THIS FUNCTION ---
     def bulk_insert_facts(self, collection_name, data_list):
         """
         Performs a simple bulk insert for fact data.
@@ -75,13 +66,11 @@ class MongoLoader:
         except Exception as e:
             print(f"ERROR: Bulk insert failed for {collection_name}. Error: {e}")
 
-    # --- (Las funciones originales de abajo ya no se usan en el main.py) ---
     
     def get_or_create_dimension(self, collection_name, doc_values, pk_name):
         """ Implements the 'get_or_create' logic (one doc at a time). """
         collection = self.db[collection_name]
         surrogate_key = doc_values[pk_name]
-        # This implementation is not batch-optimal
         existing_doc = collection.find_one({pk_name: surrogate_key})
         
         if existing_doc:
@@ -103,7 +92,6 @@ class MongoLoader:
         except Exception as e:
             print(f"ERROR inserting into {collection_name}: {e}")
 
-    # --- MODIFIED FUNCTION FOR INDEXES ---
     def create_indexes(self):
         """ 
         Creates indexes on the fact table FKs 
@@ -117,10 +105,6 @@ class MongoLoader:
         fact_collection.create_index("image_id")
         fact_collection.create_index("date_id")
         
-        # --- CAMBIO CLAVE AQUÍ ---
-        # Añadimos índices ÚNICOS a nuestras claves (patient_id, etc.)
-        # para asegurar que no haya duplicados y que las búsquedas (upserts) sean rápidas.
-        print("Creating UNIQUE indexes on dimension collections...")
         self.db['dim_patient'].create_index("patient_id", unique=True)
         self.db['dim_station'].create_index("station_id", unique=True)
         self.db['dim_protocol'].create_index("protocol_id", unique=True)
