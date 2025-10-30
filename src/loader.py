@@ -1,4 +1,5 @@
 import pymongo
+from pymongo.operations import ReplaceOne
 
 class MongoLoader:
     """
@@ -18,16 +19,12 @@ class MongoLoader:
             print(f"ERROR: Could not connect to MongoDB. Check connection string/network access. Error: {e}")
             raise
             
-    # --- NEW FUNCTION FOR BATCH LOADING DIMENSIONS ---
+    # --- MODIFIED FUNCTION FOR BATCH LOADING DIMENSIONS ---
     def bulk_upsert_dimension(self, collection_name, data_list, pk_name):
         """
         Performs a bulk "upsert" (update or insert) for dimension data.
-        This is the batch-equivalent of 'get_or_create'.
-
-        Args:
-            collection_name (str): The name of the dimension collection.
-            data_list (list[dict]): A list of dimension documents (from DataFrame.to_dict('records')).
-            pk_name (str): The name of the surrogate key field (e.g., 'patient_id').
+        This version keeps the original pk_name (e.g., 'patient_id')
+        and relies on a unique index on that field.
         """
         if not data_list:
             print(f"No data to load for {collection_name}.")
@@ -37,28 +34,30 @@ class MongoLoader:
         operations = []
 
         for doc in data_list:
-            # Copy doc to avoid modifying original
-            doc_to_insert = doc.copy()
-            # Get the surrogate key value
-            pk_value = doc_to_insert.pop(pk_name)
-            # Set it as MongoDB's primary key
-            doc_to_insert['_id'] = pk_value
+            # Get the surrogate key value (e.g., the hash)
+            pk_value = doc[pk_name] 
             
-            # Create an "upsert" operation:
-            # - filter: {'_id': pk_value} (find a doc with this ID)
-            # - replacement: doc_to_insert (this is the new data)
-            # - upsert=True (if it doesn't exist, insert it)
-            op = pymongo.ReplaceOne({'_id': pk_value}, doc_to_insert, upsert=True)
+            # --- CAMBIO CLAVE AQUÍ ---
+            # Ya no renombramos el campo a '_id'.
+            # Le decimos a ReplaceOne que busque un documento donde 'patient_id' == pk_value
+            # Si lo encuentra, lo reemplaza.
+            # Si no (upsert=True), inserta este nuevo documento.
+            # MongoDB creará su propio campo '_id' automáticamente.
+            op = ReplaceOne(
+                { pk_name: pk_value }, # El FILTRO para encontrar el documento
+                doc,                   # El documento de REEMPLAZO (con 'patient_id' intacto)
+                upsert=True
+            )
             operations.append(op)
 
         try:
-            print(f"[L] Loading {len(operations)} records into '{collection_name}' (bulk upsert)...")
+            print(f"[L] Loading {len(operations)} records into '{collection_name}' (bulk upsert on '{pk_name}')...")
             result = collection.bulk_write(operations)
             print(f"[L] Bulk load complete for '{collection_name}': {result.upserted_count} inserted, {result.modified_count} updated.")
         except Exception as e:
             print(f"ERROR: Bulk upsert failed for {collection_name}. Error: {e}")
             
-    # --- NEW FUNCTION FOR BATCH LOADING FACTS ---
+    # --- NO CHANGES TO THIS FUNCTION ---
     def bulk_insert_facts(self, collection_name, data_list):
         """
         Performs a simple bulk insert for fact data.
@@ -76,23 +75,21 @@ class MongoLoader:
         except Exception as e:
             print(f"ERROR: Bulk insert failed for {collection_name}. Error: {e}")
 
-    # --- Original functions (no longer used in batch mode, but good to keep) ---
+    # --- (Las funciones originales de abajo ya no se usan en el main.py) ---
     
     def get_or_create_dimension(self, collection_name, doc_values, pk_name):
         """ Implements the 'get_or_create' logic (one doc at a time). """
         collection = self.db[collection_name]
         surrogate_key = doc_values[pk_name]
-        existing_doc = collection.find_one({"_id": surrogate_key})
+        # This implementation is not batch-optimal
+        existing_doc = collection.find_one({pk_name: surrogate_key})
         
         if existing_doc:
             return surrogate_key
         else:
-            doc_to_insert = doc_values.copy()
-            del doc_to_insert[pk_name]
-            doc_to_insert['_id'] = surrogate_key
             try:
-                collection.insert_one(doc_to_insert)
-                print(f"[L] Created new dimension record in '{collection_name}' with _id: {surrogate_key}")
+                collection.insert_one(doc_values)
+                print(f"[L] Created new dimension record in '{collection_name}' with key: {surrogate_key}")
                 return surrogate_key
             except Exception as e:
                 print(f"ERROR inserting into {collection_name}: {e}")
@@ -106,8 +103,12 @@ class MongoLoader:
         except Exception as e:
             print(f"ERROR inserting into {collection_name}: {e}")
 
+    # --- MODIFIED FUNCTION FOR INDEXES ---
     def create_indexes(self):
-        """ Creates indexes on the fact table FKs for faster queries. """
+        """ 
+        Creates indexes on the fact table FKs 
+        and UNIQUE indexes on the dimension table surrogate keys.
+        """
         print("Creating indexes on fact_study collection...")
         fact_collection = self.db['fact_study']
         fact_collection.create_index("patient_id")
@@ -115,4 +116,15 @@ class MongoLoader:
         fact_collection.create_index("protocol_id")
         fact_collection.create_index("image_id")
         fact_collection.create_index("date_id")
+        
+        # --- CAMBIO CLAVE AQUÍ ---
+        # Añadimos índices ÚNICOS a nuestras claves (patient_id, etc.)
+        # para asegurar que no haya duplicados y que las búsquedas (upserts) sean rápidas.
+        print("Creating UNIQUE indexes on dimension collections...")
+        self.db['dim_patient'].create_index("patient_id", unique=True)
+        self.db['dim_station'].create_index("station_id", unique=True)
+        self.db['dim_protocol'].create_index("protocol_id", unique=True)
+        self.db['dim_image'].create_index("image_id", unique=True)
+        self.db['dim_date'].create_index("date_id", unique=True)
+
         print("Indexes created.")

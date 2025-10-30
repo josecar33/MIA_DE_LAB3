@@ -1,401 +1,305 @@
+import os
 import pydicom
-import pandas as pd
+import numpy as np
+import cv2 
 import hashlib
 import json
-import os
-import glob
+import re
 from datetime import datetime
 
-class DicomETLProcessor:
+class ETLProcessor:
     """
-    Handles the Extraction and Transformation of DICOM metadata
-    into Pandas DataFrames for dimensions and a fact table,
-    managing dimensions in memory using surrogate keys.
+    Handles the Extraction and Transformation logic for the DICOM ETL pipeline.
     """
-    def __init__(self, dicom_dir_path):
+    
+    def __init__(self, jpeg_output_dir):
         """
-        Initializes the processor.
+        Initializes the processor and ensures the output directory for JPEGs exists.
+        
         Args:
-            dicom_dir_path (str): Path to the directory containing DICOM files.
+            jpeg_output_dir (str): Path to the directory where JPEGs will be saved.
         """
-        self.dicom_dir_path = dicom_dir_path
-        # In-memory storage for unique dimension records (key: SK, value: attributes dict)
-        self.dimensions = {
-            "patient": {},
-            "image": {},
-            "station": {},
-            "protocol": {},
-            "date": {}
-        }
-        print("DicomETLProcessor initialized.")
+        self.jpeg_output_dir = jpeg_output_dir
+        os.makedirs(self.jpeg_output_dir, exist_ok=True)
 
-    # --- 1. Required Helper Functions (from Guide) ---
 
-    def surrogate_key(self, values):
-        """Generates a unique MD5 hash surrogate key from a dictionary."""
-        # Convert dict to a sorted JSON string for consistent hashing
-        try:
-            # Use default=str for complex DICOM types that might not be directly serializable
-            ordered_json = json.dumps(values, sort_keys=True, default=str)
-        except TypeError as e:
-            print(f"Warning: Could not serialize values for hashing: {values}. Error: {e}")
-            # Fallback: create hash from a simple representation
-            simple_repr = repr(sorted(values.items()))
-            ordered_json = json.dumps(simple_repr)
-
-        hash_object = hashlib.md5(ordered_json.encode())
-        return hash_object.hexdigest()
-
-    def format_age(self, age_str):
-        """Transforms DICOM age string ('061Y') into an integer (61). Handles errors safely."""
-        if not age_str or not isinstance(age_str, str) or 'Y' not in age_str:
-            return None
-        try:
-            return int(age_str.split('Y')[0])
-        except (ValueError, IndexError):
-            return None
-
-    def normalize_pixel_spacing(self, raw_value):
-        """Normalizes pixel spacing to the nearest predefined bin."""
-        if pd.isna(raw_value): return None
-        try: value = float(raw_value)
-        except (ValueError, TypeError): return None
-        bins = [0.6, 0.65, 0.7, 0.75, 0.8]
-        closest_bin = min(bins, key=lambda x: abs(x - value))
-        return closest_bin
-
-    def normalize_contrast_agent(self, val):
-        """Standardizes the contrast agent field."""
-        default = "No contrast agent"
-        if pd.isna(val) or val == '' or (isinstance(val, str) and len(val.strip()) <= 1):
-            return default
-        return str(val).strip() if isinstance(val, str) else default
-
-    # --- 2. Generic Dimension Processing Method ---
-
-    # et.py - Reemplaza este método completo
-
-    # et.py - Modifica esta función
-
-    def _get_or_create_dimension_sk(self, dcm_dataset, dim_key, defining_attributes, all_attributes_map, transformations=None):
+    def extract_metadata(self, dicom_file_path):
         """
-        Extracts dimension attributes, generates SK, stores unique records in memory, and returns SK.
-        Handles different DICOM value types more robustly.
-        Can now handle defining_attributes provided directly (for Date dimension).
-        """
-        defining_values = {}
-        valid_key = True
-
-        # --- Extract DEFINING attributes ---
-        for out_col, source in defining_attributes.items():
-            value = None
-            # --- NUEVA LÓGICA: Si source no es string, es un valor directo (para Date) ---
-            if not isinstance(source, str):
-                value = source # Usar el valor directamente (ej: year=2023)
-            # --- FIN NUEVA LÓGICA ---
-            else: # Si es string, es un DICOM Tag Keyword
-                tag_keyword = source
-                data_element = dcm_dataset.get(tag_keyword, None)
-                if data_element is not None and hasattr(data_element, 'value'):
-                    raw_val = data_element.value
-                    if isinstance(raw_val, pydicom.valuerep.PersonName): value = str(raw_val)
-                    elif isinstance(raw_val, list): value = tuple(str(v) for v in raw_val)
-                    else: value = raw_val # Asume que es un tipo simple o serializable
-                else:
-                    valid_key = False # Si falta un tag definitorio, clave inválida
-
-            defining_values[out_col] = value
-            if value is None: # Si después de extraer/asignar, el valor es None
-                valid_key = False
-
-        if not valid_key:
-            # print(f"Warning: Missing defining attributes for dimension '{dim_key}'. Cannot generate key.")
-            return None
-
-        sk = self.surrogate_key(defining_values)
-
-        if sk not in self.dimensions[dim_key]:
-            record_attributes = {}
-             # --- NUEVA LÓGICA: Extraer TODOS los atributos ---
-            for out_col, source in all_attributes_map.items():
-                 value = None
-                 if not isinstance(source, str): # Valor directo (para Date)
-                     value = source
-                 else: # DICOM Tag Keyword
-                     tag_keyword = source
-                     data_element = dcm_dataset.get(tag_keyword, None)
-                     # (Aquí va la lógica de extracción robusta que ya teníamos)
-                     if data_element is not None:
-                         if hasattr(data_element, 'value'):
-                             raw_val = data_element.value
-                             if isinstance(raw_val, pydicom.valuerep.PersonName): value = str(raw_val)
-                             elif isinstance(raw_val, list): value = tuple(str(v) for v in raw_val)
-                             elif isinstance(raw_val, (int, float, str, bytes)): value = raw_val
-                             elif isinstance(raw_val, pydicom.Sequence): value = "[Sequence Data]"
-                             else:
-                                 try: value = str(raw_val)
-                                 except: value = "[Unrepresentable Value]"
-                         elif isinstance(data_element, (int, float, str)): value = data_element
-                         else:
-                             try: value = str(data_element)
-                             except: value = "[Unknown DICOM Element Type]"
-
-                 record_attributes[out_col] = value
-                 # --- FIN NUEVA LÓGICA EXTRACCIÓN ---
-
-                 # Aplicar transformaciones
-                 if transformations and out_col in transformations:
-                     try:
-                         record_attributes[out_col] = transformations[out_col](record_attributes[out_col])
-                     except Exception as e:
-                         # print(f"Warning: Transformation failed...")
-                         record_attributes[out_col] = None
-
-            # Asegurarse de que los valores definitorios estén en el registro final
-            record_attributes.update(defining_values)
-            self.dimensions[dim_key][sk] = record_attributes
-
-        return sk
-        """
-        Extracts dimension attributes, generates SK, stores unique records in memory, and returns SK.
-        Handles different DICOM value types more robustly.
-        """
-        defining_values = {}
-        valid_key = True
-
-        # --- Extract DEFINING attributes first for the key ---
-        for out_col, tag_keyword in defining_attributes.items():
-            data_element = dcm_dataset.get(tag_keyword, None) # Get the DataElement object
+        Extracts raw metadata from a single DICOM file based on the star schema.
+        
+        Args:
+            dicom_file_path (str): The full path to the .dcm file.
             
-            if data_element is not None and hasattr(data_element, 'value'):
-                # Convert common DICOM types to basic Python types for the key
-                value = data_element.value
-                if isinstance(value, pydicom.valuerep.PersonName):
-                    defining_values[out_col] = str(value) # Use string representation for names
-                elif isinstance(value, list): # Handle MultiValue
-                     defining_values[out_col] = tuple(str(v) for v in value) # Use tuple of strings
-                else:
-                    defining_values[out_col] = value # Use the value directly if simple type
-            else:
-                defining_values[out_col] = None
-                valid_key = False
+        Returns:
+            dict: A dictionary containing the raw extracted metadata, or None if extraction fails.
+        """
+        try:
+            ds = pydicom.dcmread(dicom_file_path, stop_before_pixels=True)
+            
+            def get_val(tag, default=None):
+                val = ds.get(tag, default)
+                if hasattr(val, 'value'):
+                    return str(val.value)
+                return str(val) if val is not None else None
 
-        if not valid_key:
-            # print(f"Warning: Missing defining attributes for dimension '{dim_key}'.")
+            raw_data = {
+                # Patient Dimension
+                'PatientID': get_val((0x0010, 0x0020)),
+                'PatientSex': get_val((0x0010, 0x0040)),
+                'PatientAge': get_val((0x0010, 0x1010)), 
+
+                # Station Dimension
+                'Manufacturer': get_val((0x0008, 0x0070)),
+                'ManufacturerModelName': get_val((0x0008, 0x1090)),
+
+                # Protocol Dimension
+                'BodyPartExamined': get_val((0x0018, 0x0015)),
+                'ContrastBolusAgent': get_val((0x0018, 0x0010)),
+                'PatientPosition': get_val((0x0018, 0x5100)),
+
+                # Image Dimension
+                'Rows': get_val((0x0028, 0x0010)),
+                'Columns': get_val((0x0028, 0x0011)),
+                'PixelSpacing': get_val((0x0028, 0x0030)), 
+                'SliceThickness': get_val((0x0018, 0x0050)),
+                'KVP': get_val((0x0018, 0x0060)),
+
+                # Date Dimension
+                'StudyDate': get_val((0x0008, 0x0020)), 
+
+                # Study Fact
+                'StudyInstanceUID': get_val((0x0020, 0x000D)),
+                'ExposureTime': get_val((0x0018, 0x1150)),
+                'XRayTubeCurrent': get_val((0x0018, 0x1151)),
+            }
+            return raw_data
+        
+        except Exception as e:
+            print(f"[E] ERROR: Failed to read {dicom_file_path}. Error: {e}")
             return None
 
-        sk = self.surrogate_key(defining_values)
-
-        if sk not in self.dimensions[dim_key]:
-            # --- If new, extract ALL attributes for the dimension record ---
-            record_attributes = {}
-            for out_col, tag_keyword in all_attributes_map.items():
-                data_element = dcm_dataset.get(tag_keyword, None)
-                value = None # Default to None
-
-                if data_element is not None:
-                     # Check if it's a DataElement with a value property
-                    if hasattr(data_element, 'value'):
-                        raw_val = data_element.value
-                        # Handle specific types for storage
-                        if isinstance(raw_val, pydicom.valuerep.PersonName):
-                            value = str(raw_val)
-                        elif isinstance(raw_val, list): # MultiValue
-                             value = tuple(str(v) for v in raw_val) # Store as tuple
-                        elif isinstance(raw_val, (int, float, str, bytes)):
-                             value = raw_val # Keep basic types as they are
-                        elif isinstance(raw_val, pydicom.Sequence):
-                             # Decide how to handle sequences (e.g., skip, take first item, serialize to JSON)
-                             value = "[Sequence Data]" # Placeholder - adjust as needed
-                        else:
-                             # Fallback for other complex types - convert to string
-                             try:
-                                value = str(raw_val)
-                             except:
-                                value = "[Unrepresentable Value]"
-                    # Handle cases where .get() might return a simple type directly (less common but possible)
-                    elif isinstance(data_element, (int, float, str)):
-                         value = data_element
-                    else:
-                         # Fallback if it's not a standard DataElement structure we expect
-                         try:
-                            value = str(data_element)
-                         except:
-                             value = "[Unknown DICOM Element Type]"
-
-                record_attributes[out_col] = value
-
-                # Apply transformations AFTER basic extraction
-                if transformations and out_col in transformations:
-                    try:
-                        # Pass the extracted value to the transformation function
-                        record_attributes[out_col] = transformations[out_col](record_attributes[out_col])
-                    except Exception as e:
-                        # print(f"Warning: Transformation failed for {out_col} with value {record_attributes[out_col]}. Error: {e}")
-                        record_attributes[out_col] = None
-
-            # Add the defining values used for the key into the record if they weren't already included
-            record_attributes.update(defining_values)
-            self.dimensions[dim_key][sk] = record_attributes
-
-        return sk
-    # --- 3. Main Processing Loop ---
-
-    # et.py - Reemplaza esta función completa
-
-# et.py - Replace the entire process_dicom_files function with this one
-
-    def process_dicom_files(self):
+    def transform_data(self, raw_data, dicom_file_path):
         """
-        Iterates through DICOM files, processes dimensions using helper method,
-        collects fact data, and returns final DataFrames.
+        Transforms raw extracted data into the structured star schema format
+        and processes the image file (DICOM -> JPEG).
+        
+        Args:
+            raw_data (dict): The raw metadata from extract_metadata.
+            dicom_file_path (str): The full path to the original .dcm file (for image processing).
+            
+        Returns:
+            dict: A dictionary containing all dimension and fact table data, ready for loading.
         """
-        print(f"Searching for DICOM files in: {self.dicom_dir_path}")
-        dicom_files = glob.glob(os.path.join(self.dicom_dir_path, '*.dcm'))
-        print(f"Found {len(dicom_files)} DICOM files.")
-        if not dicom_files:
-            print("No DICOM files found. Exiting.")
-            return None # Return None if no files
+        if not raw_data:
+            return None
 
-        fact_study_list = []
+        patient_age_int = self.format_age(raw_data.get('PatientAge'))
+        patient_dim_vals = {
+            'patient_id_dicom': raw_data.get('PatientID'),
+            'sex': raw_data.get('PatientSex'),
+            'age': patient_age_int
+        }
+        patient_key = self.surrogate_key(patient_dim_vals)
 
-        for filepath in dicom_files:
-            filename = os.path.basename(filepath) # Define filename here
+        station_dim_vals = {
+            'manufacturer': raw_data.get('Manufacturer'),
+            'model': raw_data.get('ManufacturerModelName')
+        }
+        station_key = self.surrogate_key(station_dim_vals)
+
+        contrast_agent = self.normalize_contrast_agent(raw_data.get('ContrastBolusAgent'))
+        protocol_dim_vals = {
+            'body_part': raw_data.get('BodyPartExamined'),
+            'contrast_agent': contrast_agent,
+            'position': raw_data.get('PatientPosition')
+        }
+        protocol_key = self.surrogate_key(protocol_dim_vals)
+
+        # Date Dimension
+        study_date = raw_data.get('StudyDate')
+        year, month = None, None
+        try:
+            if study_date:
+                dt = datetime.strptime(study_date, '%Y%m%d')
+                year, month = dt.year, dt.month
+        except Exception as e:
+            print(f"[T] Warning: Could not parse date '{study_date}'. Error: {e}")
+        
+        date_dim_vals = {'year': year, 'month': month}
+        date_key = self.surrogate_key(date_dim_vals)
+
+        # Image Dimension
+        raw_pixel_spacing = raw_data.get('PixelSpacing')
+        pixel_spacing_val = None
+        if raw_pixel_spacing:
             try:
-                # print(f"Processing: {filename}") # Uncomment for detailed file processing log
-                dcm = pydicom.dcmread(filepath, force=True)
+                match = re.search(r"[\d\.]+", raw_pixel_spacing)
+                if match:
+                    pixel_spacing_val = float(match.group(0))
+            except Exception:
+                pass 
+        
+        norm_pixel_spacing = self.normalize_pixel_spacing(pixel_spacing_val)
+        
+        image_dim_vals = {
+            'rows': int(raw_data.get('Rows')) if raw_data.get('Rows') else None,
+            'cols': int(raw_data.get('Columns')) if raw_data.get('Columns') else None,
+            'pixel_spacing_norm': norm_pixel_spacing,
+            'slice_thickness': float(raw_data.get('SliceThickness')) if raw_data.get('SliceThickness') else None,
+            'kvp': float(raw_data.get('KVP')) if raw_data.get('KVP') else None
+        }
+        image_key = self.surrogate_key(image_dim_vals)
 
-                # --- Process Dimensions for this file using correct Keywords ---
+        jpeg_path = self.dicom_to_jpeg(dicom_file_path, self.jpeg_output_dir)
 
-                # Patient Dimension (Keyword: PatientID)
-                patient_sk = self._get_or_create_dimension_sk(
-                    dcm, 'patient',
-                    defining_attributes={'patient_dicom_id': 'PatientID'},
-                    all_attributes_map={'patient_dicom_id': 'PatientID', 'sex': 'PatientSex', 'age': 'PatientAge'},
-                    transformations={'age': self.format_age}
-                )
+        study_fact = {
+   
+            # Foreign Keys
+            'patient_id': patient_key,
+            'station_id': station_key,
+            'protocol_id': protocol_key,
+            'image_id': image_key,
+            'date_id': date_key,
 
-                # Image Dimension (Keyword: SOPInstanceUID)
-                image_sk = self._get_or_create_dimension_sk(
-                    dcm, 'image',
-                    defining_attributes={'sop_instance_uid': 'SOPInstanceUID'},
-                    all_attributes_map={
-                        'sop_instance_uid': 'SOPInstanceUID', 'rows': 'Rows', 'columns': 'Columns',
-                        'pixel_spacing': 'PixelSpacing', # Raw value stored here
-                        'slice_thickness': 'SliceThickness', 'photometric_interp': 'PhotometricInterpretation'
-                    }
-                )
+            'exposure_time': float(raw_data.get('ExposureTime')) if raw_data.get('ExposureTime') else None,
+            'tube_current': float(raw_data.get('XRayTubeCurrent')) if raw_data.get('XRayTubeCurrent') else None,
+            'file_path': jpeg_path
+         
+        }
 
-                # Station Dimension (Keywords: Manufacturer, ManufacturerModelName)
-                station_sk = self._get_or_create_dimension_sk(
-                    dcm, 'station',
-                    defining_attributes={'manufacturer': 'Manufacturer', 'model': 'ManufacturerModelName'},
-                    all_attributes_map={'manufacturer': 'Manufacturer', 'model': 'ManufacturerModelName'}
-                )
+        return {
+            'fact_study': study_fact,
+            'dim_patient': {'patient_id': patient_key, **patient_dim_vals},
+            'dim_station': {'station_id': station_key, **station_dim_vals},
+            'dim_protocol': {'protocol_id': protocol_key, **protocol_dim_vals},
+            'dim_image': {'image_id': image_key, **image_dim_vals},
+            'dim_date': {'date_id': date_key, **date_dim_vals}
+        }
 
-                # Protocol Dimension (Keyword: BodyPartExamined as primary identifier)
-                protocol_sk = self._get_or_create_dimension_sk(
-                    dcm, 'protocol',
-                    defining_attributes={'bodypart_part': 'BodyPartExamined'}, # Using only BodyPartExamined
-                    all_attributes_map={
-                        'bodypart_part': 'BodyPartExamined',
-                        'protocol_name': 'ProtocolName', # Attempt to capture if exists
-                        'study_description_fallback': 'StudyDescription', # Capture description
-                        'contrast_agent': 'ContrastBolusAgent',
-                        'patient_position': 'PatientPosition'
-                    },
-                    transformations={'contrast_agent': self.normalize_contrast_agent}
-                )
 
-                # Date Dimension (Based on calculated Year/Month from StudyDate)
-                study_date_str = dcm.get('StudyDate', None)
-                date_sk = None # Initialize
-                year, month = None, None
-                if study_date_str and len(str(study_date_str)) == 8:
-                    try:
-                        dt = datetime.strptime(str(study_date_str), '%Y%m%d')
-                        year = dt.year
-                        month = dt.month
-                        date_key_dict = {'year': year, 'month': month}
-                        # Pass None for dcm_dataset as attributes are directly provided
-                        date_sk = self._get_or_create_dimension_sk(
-                            None, 'date', # Pass None here
-                            defining_attributes=date_key_dict,
-                            all_attributes_map=date_key_dict
-                        )
-                    except ValueError:
-                         date_sk = None # Handle invalid date format silently now
-                # else: date_sk remains None if StudyDate is missing/invalid
+    @staticmethod
+    def surrogate_key(values):
+        """
+        Creates a unique, repeatable MD5 hash string from a dictionary.
+        
+        Args:
+            values (dict): A dictionary of values for a dimension.
+            
+        Returns:
+            str: A 32-character MD5 hash string.
+        """
+        values_string = json.dumps(values, sort_keys=True, default=str)
+        
+        md5_hash = hashlib.md5(values_string.encode('utf-8')).hexdigest()
+        return md5_hash
 
-                # --- Print generated SKs for debugging ---
-                # print(f"  File: {filename}")
-                # print(f"    Patient SK: {patient_sk}")
-                # print(f"    Image SK:   {image_sk}")
-                # print(f"    Station SK: {station_sk}")
-                # print(f"    Protocol SK:{protocol_sk}")
-                # print(f"    Date SK:    {date_sk}")
+    @staticmethod
+    def format_age(age_str):
+        """
+        Transforms a DICOM age string (e.g., '061Y') into an integer.
+        Handles missing or malformed data safely.
+        
+        Args:
+            age_str (str): The DICOM age string.
+            
+        Returns:
+            int or None: The age as an integer, or None if not found.
+        """
+        if not age_str:
+            return None
+        
+        match = re.search(r'(\d+)', age_str)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
 
-                # --- Assemble Fact Record ---
-                # Define which dimension SKs are absolutely essential for a fact record
-                essential_sks = [station_sk, patient_sk, image_sk, date_sk] # Example: Protocol SK is optional
-                if not all(essential_sks):
-                    # print(f"  --> Skipping file {filename} due to missing essential dimension keys.")
-                    continue # Skip this file
-
-                # --- Extract Facts ---
-                exposure_time = dcm.get('ExposureTime', None)
-                tube_current = dcm.get('XRayTubeCurrent', None)
-
-                # Extract and normalize pixel spacing values for the fact table
-                pixel_spacing_raw = dcm.get("PixelSpacing", [None, None])
-                pixel_spacing_x_norm = self.normalize_pixel_spacing(pixel_spacing_raw[0] if isinstance(pixel_spacing_raw, list) and len(pixel_spacing_raw)>0 else None)
-                pixel_spacing_y_norm = self.normalize_pixel_spacing(pixel_spacing_raw[1] if isinstance(pixel_spacing_raw, list) and len(pixel_spacing_raw)>1 else None)
-
-                fact_record = {
-                    'station_id': station_sk,
-                    'patient_id': patient_sk,
-                    'image_id': image_sk,
-                    'protocol_id': protocol_sk, # Can be None if protocol_sk was None
-                    'study_date_id': date_sk,   # Renamed for clarity
-                    'exposure_time': float(exposure_time) if exposure_time is not None else None,
-                    'tube_current': float(tube_current) if tube_current is not None else None,
-                    'file_path': filepath, # Store the relative path
-                    # Store normalized pixel spacing as facts
-                    'pixel_spacing_x_norm': pixel_spacing_x_norm,
-                    'pixel_spacing_y_norm': pixel_spacing_y_norm
-                }
-                fact_study_list.append(fact_record)
-
-            except Exception as e:
-                print(f"ERROR processing file {filepath}: {e}")
-
-        # --- Convert In-Memory Dimensions and Facts to DataFrames ---
-        print("\nCreating final DataFrames from collected dimension data...")
-
-        dim_dfs = {}
-        for dim_name, dim_data in self.dimensions.items():
-            if dim_data:
-                df = pd.DataFrame.from_dict(dim_data, orient='index')
-                # Use the dimension name + '_id' convention for the SK column
-                sk_col_name = f'{dim_name}_id'
-                df.index.name = sk_col_name
-                df.reset_index(inplace=True)
-                dim_dfs[f'dim_{dim_name}'] = df
-                print(f"Created DataFrame for dimension: dim_{dim_name}")
+    @staticmethod
+    def dicom_to_jpeg(input_path, output_dir, size=(256, 256)):
+        """
+        Reads a DICOM file, normalizes its pixel values, resizes it, 
+        and saves it as a grayscale JPEG.
+        
+        Args:
+            input_path (str): Path to the source DICOM file.
+            output_dir (str): Directory to save the JPEG.
+            size (tuple): The target (width, height) for resizing.
+            
+        Returns:
+            str or None: The full path to the saved JPEG, or None on failure.
+        """
+        try:
+            ds = pydicom.dcmread(input_path)
+            
+            pixels = ds.pixel_array.astype(float)
+            
+            min_val = np.min(pixels)
+            max_val = np.max(pixels)
+            if (max_val - min_val) > 1e-6:
+                pixels_scaled = (pixels - min_val) / (max_val - min_val)
             else:
-                print(f"Warning: No data collected for dimension: {dim_name}")
-                dim_dfs[f'dim_{dim_name}'] = pd.DataFrame() # Create empty DF
+                pixels_scaled = np.zeros(pixels.shape)
+                        
+            pixels_8bit = (pixels_scaled * 255.0).astype(np.uint8)
+            
+            resized_img = cv2.resize(pixels_8bit, size, interpolation=cv2.INTER_AREA)
+            
+            filename = os.path.basename(input_path).replace('.dcm', '.jpg')
+            output_path = os.path.join(output_dir, filename)
+            
+            cv2.imwrite(output_path, resized_img)
+            
+            return output_path
+        
+        except Exception as e:
+            print(f"ERROR processing image {input_path}: {e}")
+            if 'decompress' in str(e):
+                 print("-> HINT: This DICOM file might be compressed. Ensure 'pylibjpeg' is installed (`pip install pylibjpeg`).")
+            return None
 
-        if fact_study_list:
-            fact_study_df = pd.DataFrame(fact_study_list)
-            # Add a unique primary key for the fact table itself (optional but good practice)
-            fact_study_df.insert(0, 'study_fact_id', range(1, len(fact_study_df) + 1))
-            print("Created DataFrame for fact table: fact_study")
-        else:
-            print("Warning: No data collected for fact table.")
-            fact_study_df = pd.DataFrame()
+    @staticmethod
+    def normalize_pixel_spacing(raw_value):
+        """
+        Rounds a numeric pixel spacing value to the nearest predefined bin
+        (0.6, 0.65, 0.7, 0.75, 0.8).
+        
+        Args:
+            raw_value (float or str): The raw pixel spacing value.
+            
+        Returns:
+            float or None: The normalized (binned) value, or None.
+        """
+        if raw_value is None:
+            return None
+            
+        bins = [0.6, 0.65, 0.7, 0.75, 0.8]
+        try:
+            float_val = float(raw_value)
+            normalized_val = min(bins, key=lambda x: abs(x - float_val))
+            return normalized_val
+        except (ValueError, TypeError):
+            return None
 
-        dim_dfs['fact_study'] = fact_study_df
-
-        print("ETL (Extract-Transform) phase finished.")
-        return dim_dfs
+    @staticmethod
+    def normalize_contrast_agent(val):
+        """
+        Standardizes DICOM contrast agent metadata.
+        Replaces missing, empty, or single-character values with 'None'.
+        
+        Args:
+            val (str): The raw contrast agent string.
+            
+        Returns:
+            str: The standardized string.
+        """
+        if val is None:
+            return "None"
+        
+        val_str = str(val).strip()
+        
+        if not val_str or len(val_str) <= 1:
+            return "None"
+        
+        return val_str
